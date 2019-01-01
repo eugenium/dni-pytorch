@@ -8,6 +8,8 @@ from torchvision import datasets, transforms
 from torch.autograd import Variable
 import dni
 
+from torchvision.datasets.cifar import CIFAR10
+
 # Training settings
 parser = argparse.ArgumentParser(description='PyTorch MNIST Example')
 parser.add_argument('--batch-size', type=int, default=256, metavar='N',
@@ -57,9 +59,9 @@ transform_test = transforms.Compose([
 ])
 
 trainset_class = CIFAR10(root='.', train=True, download=True,transform=transform_train)
-trainloader_classifier = torch.utils.data.DataLoader(trainset_class, batch_size=args.batch_size, shuffle=True, num_workers=args.workers)
-testset = torchvision.datasets.CIFAR10(root='.', train=False, download=True, transform=transform_test)
-testloader = torch.utils.data.DataLoader(testset, batch_size=256, shuffle=False, num_workers=2)
+train_loader = torch.utils.data.DataLoader(trainset_class, batch_size=args.batch_size, shuffle=True, num_workers=4)
+testset = CIFAR10(root='.', train=False, download=True, transform=transform_test)
+test_loader = torch.utils.data.DataLoader(testset, batch_size=256, shuffle=False, num_workers=2)
 
 
 def one_hot(indexes, n_classes):
@@ -87,32 +89,33 @@ class Net(nn.Module):
     def __init__(self):
         super(Net, self).__init__()
         self.block = nn.ModuleList([])
-        self.backward_interfaces = []
+        self.backward_interfaces = nn.ModuleList([])
 
         self.block.append(nn.Sequential(
             nn.Conv2d(3, 128, kernel_size=5, padding=2),
-            nn.BatchNorm2d(128), nn.ReLU,
-            nn.MaxPool((3,3))
+            nn.BatchNorm2d(128), nn.ReLU(),
+            nn.MaxPool2d((3,3))
         ))
         self.block.append(nn.Sequential(
             nn.Conv2d(128, 128, kernel_size=5, padding=2),
-            nn.BatchNorm2d(128), nn.ReLU,
-            nn.AvgPool((3, 3))
+            nn.BatchNorm2d(128), nn.ReLU(),
+            nn.AvgPool2d((3, 3))
         ))
         self.block.append(nn.Sequential(
             nn.Conv2d(128, 128, kernel_size=5, padding=2),
-            nn.BatchNorm2d(128), nn.ReLU,
-            nn.AvgPool((3, 3))
+            nn.BatchNorm2d(128), nn.ReLU(),
+            nn.AvgPool2d((3, 3))
         ))
         if args.dni:
             self.backward_interfaces[0] = dni.BackwardInterface(ConvSynthesizer())
             self.backward_interfaces[1] = dni.BackwardInterface(ConvSynthesizer())
             self.backward_interfaces[2] = dni.BackwardInterface(ConvSynthesizer())
-        self.fc1 = nn.Linear(128*9, 10)
+        self.fc1 = nn.Linear(128, 10)
 
     def forward(self, x, y=None):
         for i in range(3):
             x = self.block[i](x)
+#            import ipdb; ipdb.set_trace()
             if args.dni and self.training:
                 if args.context:
                     context = one_hot(y, 10)
@@ -120,8 +123,8 @@ class Net(nn.Module):
                     context = None
                 with dni.synthesizer_context(context):
                     x = self.backward_interfaces[i](x)
-        x = F.relu(x)
-        x = x.view(-1, 128*9)
+ #       import ipdb; ipdb.set_trace()
+        x = x.view(-1, 128)
         x = self.fc1(x)
         return F.log_softmax(x)
 
@@ -129,10 +132,10 @@ class Net(nn.Module):
 class ConvSynthesizer(nn.Module):
     def __init__(self):
         super(ConvSynthesizer, self).__init__()
-        self.input_trigger = nn.Conv2d(128, 128, kernel_size=5, padding=4)
+        self.input_trigger = nn.Conv2d(128, 128, kernel_size=5, padding=2)
         self.input_context = nn.Linear(128, 128)
-        self.hidden = nn.Conv2d(128, 128, kernel_size=5, padding=4)
-        self.output = nn.Conv2d(128, 128, kernel_size=5, padding=4)
+        self.hidden = nn.Conv2d(128, 128, kernel_size=5, padding=2)
+        self.output = nn.Conv2d(128, 128, kernel_size=5, padding=2)
         # zero-initialize the last layer, as in the paper
         nn.init.constant(self.output.weight, 0)
 
@@ -152,10 +155,12 @@ model = Net()
 if args.cuda:
     model.cuda()
 
+
+optimizer = optim.Adam(model.parameters(),lr=3e-5)
 def train(epoch):
     model.train()
-    lr = lr_scheduler(args.epochs, 0.1, 0.005, epoch)
-    optimizer = optim.SGD(model.parameters(), lr=lr, momentum=0.9, weight_decay=5e-4)
+   # lr = lr_scheduler(args.epochs, 0.1, 0.005, epoch)
+    #optimizer = optim.SGD(model.parameters(), lr=lr, momentum=0.9, weight_decay=5e-4)
 
     for batch_idx, (data, target) in enumerate(train_loader):
         if args.cuda:
